@@ -1,0 +1,24 @@
+2025/08/27 17:58:02 📁 CWD: C:\Users\HP\PROJELER\event_listener_backend
+2025/08/27 17:58:02 🟢 .env bulundu (proje kökü)
+2025/08/27 17:58:02 ⚠️ TELEGRAM_BOT_TOKEN görülmedi
+2025/08/27 17:58:02 ⚠️ TELEGRAM_CHAT_ID görülmedi
+2025/08/27 17:58:02 ⚠️ TELEGRAM_CHAT_ID_2 görülmedi
+2025/08/27 17:58:02 ⚠️ ARBITRUM_RPC görülmedi
+2025/08/27 17:58:02 🔍 WALLET_PROFILE env değeri: ''
+2025/08/27 17:58:02 🔍 İşlenmiş profil: ''
+2025/08/27 17:58:02 ✅ Production cüzdanları seçildi
+2025/08/27 17:58:02 🚀 Production profili aktif (7 adres)
+2025/08/27 17:58:02 🔎 Main App: 0x33381eC82DD811b1BABa841f1e2410468aeD7047
+2025/08/27 17:58:02 🔎 wETH Hub: 0x845A66F0230970971240d76fdDF7f961e08e3f01
+2025/08/27 17:58:02 🔎 USDT Hub: 0x3b0794015C9595aE06cf2069C0faC5d9B290f911
+2025/08/27 17:58:02 🔎 wBTC Hub: 0xec6595E48933D6f752a6f6421f0a9A019Fb80081
+2025/08/27 17:58:02 🔎 USDC Hub: 0xEA1523eB5F0ecDdB1875122aC2c9470a978e3010
+2025/08/27 17:58:02 🔎 PAXG Hub: 0xc5eFb9E4EfD91E68948d5039819494Eea56FFA46
+2025/08/27 17:58:02 🔎 PECTO Hub: 0xdAE486e75Cdf40bd9B2A0086dCf66e2d6C4e784b
+2025/08/27 17:58:02 ✅ Bildirim sistemi başlatıldı (bot entegrasyonu ile)
+2025/08/27 17:58:02 🌐 HTTP API başlatılıyor: :8080
+2025/08/27 17:58:02 ❌ Telegram bot başlatılamadı: TELEGRAM_BOT_TOKEN boş
+2025/08/27 17:58:02 🚀 Uygulama başladı!
+2025/08/27 17:58:02 📡 Event dinleme aktif
+2025/08/27 17:58:02 🌐 HTTP API aktif
+2025/08/27 17:58:02 ❌ ARBITRUM_RPC ortam değişkeni tanımlı değil
