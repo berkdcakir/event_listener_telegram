@@ -1,185 +1,123 @@
 # Event Listener Backend
 
-Bu proje Arbitrum blockchain'deki belirli kontratları dinler ve Telegram üzerinden bildirim gönderir. Ayrıca Telegram bot komutları ve HTTP API endpoint'leri ile balance sorguları yapabilir.
+Ethereum (Arbitrum) üzerinde belirli cüzdanlar ve kontratlardan gelen event’leri dinler, anlamlandırır ve Telegram’a bildirim gönderir. ERC-20 transferleri, özel event’ler (ör. InstallModule/DiamondCut) ve native ETH transferleri desteklenir. Önemli olaylar ayrı gruba, normal olaylar ayrı gruba yönlendirilir.
+Neler yapar?
+Canlı event dinleme: İzlenen adresler için Transfer, InstallModule, DiamondCut ve ABI’den öğrenilen event’ler.
+Native ETH tespiti: Log üretmeyen native transferleri blok tarayarak bulur.
+USD tahmini: DexScreener/CoinGecko’dan fiyat çekerek USD değeri hesaplar.
+Önem derecelendirme: Tutar ve event türüne göre “Önemli/Normal” ayrımı.
+Telegram bildirimleri: Gruplandırma, önemli eventlerde alarm akışı ve çift grup desteği.
+Profil yönetimi: test ve production cüzdan profilleri.
 
-## Özellikler
+Kurulum
+Gereksinimler
+Go 1.21+
+Git
+(Opsiyonel) Docker/Docker Compose
+Telegram Bot Token ve Chat ID’ler
+Derleme ve Çalıştırma
+# Derleme
+go build -o event-listener-backend.exe
 
-### 🔍 Event Dinleme
-- Arbitrum blockchain'deki belirli kontratları dinler
-- **🔴 ModuleInstalled** eventleri (kırmızı top - en önemli)
-- **🟠 Transfer** eventleri (turuncu top - önemli)
-- **🔵 Diğer** eventler (mavi top - genel)
-- **💰 Özel cüzdan** (0x049A025EA9e0807f2fd38c62923fCe688cBd8460) 250$+ transferleri
-- **📢 Gruplandırılmış** bildirimler (aynı anda gelen eventler birleştirilir)
+# Çalıştırma (Windows örneği)
+.\event-listener-backend.exe
 
-### 🤖 Telegram Bot Komutları
-- `/help` - Mevcut komutları listeler
+Geliştirici Modu
+go run . 
 
-**Hub Balance'ları:**
-- `/balanceUsdt` - USDT Hub balance'ını gösterir
-- `/balanceEth` - ETH Hub balance'ını gösterir
-- `/balanceWbtc` - WBTC Hub balance'ını gösterir
+Docker ile
+docker build -t telegram_bot_listener .
+docker run --rm --name telegram_bot_listener --env-file .env telegram_bot_listener
 
-**Ana Kontrat Balance'ları:**
-- `/balanceMain` - Ana kontrat ETH balance'ını gösterir
-- `/mainUsdt` - Ana kontrat USDT balance'ını gösterir
-- `/mainEth` - Ana kontrat ETH balance'ını gösterir
-- `/mainWbtc` - Ana kontrat WBTC balance'ını gösterir
+Docker Compose ile
+docker-compose up --build
 
-### 🌐 HTTP API
-- `GET /health` - Sağlık kontrolü
-- `GET /balance/:token` - Hub token balance'ı (USDT, ETH, WBTC)
-- `GET /balance/main` - Ana kontrat ETH balance'ı
-- `GET /balance/main/:token` - Ana kontrat token balance'ı (USDT, ETH, WBTC)
+Yapılandırma (Env Değişkenleri)
+Aşağıdaki ayarlar .env dosyası ile ya da ortam değişkenleri olarak verilir.
+Ağ/RPC
+ARBITRUM_RPC: WSS/WS/HTTPS RPC URL’si (zorunlu)
+ARBITRUM_HTTP_RPC: Raw HTTP istekler için alternatif URL (opsiyonel)
+BACKEND_API_URL: HTTP API base URL (örn: http://3.226.134.195:8080)
+Cüzdan Profili
+WALLET_PROFILE: test yazılırsa test cüzdanları, aksi halde production cüzdanları yüklenir. Boş → production.
+WATCH_EXTRA_ADDRESSES: Virgüllü ek adresler. Örn: 0xabc...,0xdef...
+Telegram
+TELEGRAM_BOT_TOKEN: Bot token
+TELEGRAM_CHAT_ID veya TELEGRAM_CHAT_ID_1: Normal/önemsiz event grubu
+TELEGRAM_CHAT_ID_2: Önemli event grubu
+Önemli eventler GRUP 2’ye; normal eventler GRUP 1’e gider. Grup yoksa fallback uygulanır.
+Fiyatlandırma/Önem
+TOKEN_PRICE_CACHE_TTL: Fiyat cache süresi (dk ya da 0.x dakika). Örn: 0.5 (30 sn), 2 (2 dk)
+USD_THRESHOLD: Transfer’in “Önemli” sayılacağı USD eşiği. Örn: 50 (default 50)
+NATIVE_USD_PRICE: Native coin basit USD tahmini. Örn: 3000
+USDC/USDT stable’ları güvenlik için 1.0 USD’ya sabitlenir.
+Bootstrap ve Polling
+BOOTSTRAP_ENABLE: İlk açılışta geçmiş tarama. false yaparsanız kapatılır.
+BOOTSTRAP_BLOCKS: Geçmiş kaç blok taransın (default 2000)
+BOOTSTRAP_MAX_WINDOW: Tarama pencere boyutu (default 500)
+IMMEDIATE_IMPORTANT: true ise önemli eventler beklemeden gönderilir.
+NATIVE_BACKFILL_BLOCKS: Native tarayıcı için geri tarama blok sayısı (opsiyonel)
+Debug ve Tanılama
+DEBUG_MODE: true olursa detaylı loglar
+DIAG_TX_HASH: Belirli bir tx hash için adım adım tanılama log’u üretir
+ENABLE_NATIVE_ZERO_TRANSFER_LOGS: true yapmayın; native coin log üretmez (özel senaryolar için)
 
-## Kurulum
+Örnek .env
+# Ağ
+ARBITRUM_RPC=wss://arb-mainnet.example/ws
+ARBITRUM_HTTP_RPC=https://arb-mainnet.example/http
+BACKEND_API_URL=http://3.226.134.195:8080
 
-### Gereksinimler
-- Go 1.23+
-- Arbitrum RPC endpoint
-- Telegram Bot Token
+# Profil
+WALLET_PROFILE=prod
+WATCH_EXTRA_ADDRESSES=
 
-### Ortam Değişkenleri
-`.env` dosyasında aşağıdaki değişkenleri tanımlayın:
+# Telegram
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_CHAT_ID_1=-1001111111111
+TELEGRAM_CHAT_ID_2=-1002222222222
 
-```env
-# Arbitrum RPC
-ARBITRUM_RPC=https://arb1.arbitrum.io/rpc
+# Fiyat/Önem
+TOKEN_PRICE_CACHE_TTL=0.5
+USD_THRESHOLD=50
+NATIVE_USD_PRICE=3000
 
-# Telegram Bot
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
-
-# API Port (opsiyonel, varsayılan: 8080)
-API_PORT=8080
-
-# Backend API URL (Telegram bot için, opsiyonel)
-BACKEND_API_URL=http://localhost:8080
-
-# Bootstrap ayarları (opsiyonel)
+# Davranışlar
+BOOTSTRAP_ENABLE=true
 BOOTSTRAP_BLOCKS=2000
 BOOTSTRAP_MAX_WINDOW=500
-BOOTSTRAP_NOTIFY=false
-```
+IMMEDIATE_IMPORTANT=false
+DEBUG_MODE=false
 
-### Çalıştırma
+ÇALIŞTIRMA: go run main.go
+# Derleyip çalıştırma
+go build -o event-listener-backend.exe
+.\event-listener-backend.exe
 
-```bash
-# Bağımlılıkları yükle
-go mod tidy
+profil Değiştirme
+Production cüzdanları: WALLET_PROFILE boş veya prod/production
+Test cüzdanları: WALLET_PROFILE=test
 
-# Projeyi derle
-go build -o event-listener-backend.exe .
+Önem Eşiğini Değiştirme
+USD_THRESHOLD=250
 
-# Çalıştır
-./event-listener-backend.exe
-```
+Telegram Bildirim Mantığı
+Önemli: InstallModule, DiamondCut→InstallModule ve USD tutarı eşik üzeri transferler.
+Grup 2’ye gider; ayrıca dört adet kısa “ALARM” mesajı tetiklenir.
+Normal: Diğer eventler Grup 1’e.
+Gruplar yoksa fallback kuralları ile mesaj kaybolmaz.
 
-## API Kullanımı
+Loglar ve Tanılama
+DEBUG_MODE=true ile ayrıntılı loglar açılır.
+Belirli bir işlem hash’i tanılamak için:
+DIAG_TX_HASH=0x....txhash
 
-### Balance Sorguları
-
-```bash
-# USDT balance
-curl http://localhost:8080/balance/usdt
-
-# ETH balance
-curl http://localhost:8080/balance/eth
-
-# WBTC balance
-curl http://localhost:8080/balance/wbtc
-
-# Ana kontrat ETH balance
-curl http://localhost:8080/balance/main
-
-# Ana kontrat USDT balance
-curl http://localhost:8080/balance/main/usdt
-
-# Ana kontrat WBTC balance
-curl http://localhost:8080/balance/main/wbtc
-```
-
-### Örnek Response
-
-```json
-{
-  "success": true,
-  "token": "USDT",
-  "address": "0x3b0794015C9595aE06cf2069C0faC5d9B290f911",
-  "balance": "1000.50",
-  "symbol": "USDT"
-}
-```
-
-## Telegram Bot Kullanımı
-
-Bot'u Telegram'da başlattıktan sonra aşağıdaki komutları kullanabilirsiniz:
-
-- `/help` - Tüm komutları listeler
-- `/balanceUsdt` - USDT Hub balance'ını gösterir
-- `/balanceEth` - ETH Hub balance'ını gösterir
-- `/balanceWbtc` - WBTC Hub balance'ını gösterir
-- `/balanceMain` - Ana kontrat ETH balance'ını gösterir
-
-**Not:** Bot sadece `/help` komutuna cevap verir. Diğer mesajlara otomatik cevap vermez.
-
-## İzlenen Kontratlar
-
-- **Main App**: `0x33381eC82DD811b1BABa841f1e2410468aeD7047`
-- **USDT Hub**: `0x3b0794015C9595aE06cf2069C0faC5d9B290f911`
-- **ETH Hub**: `0x845A66F0230970971240d76fdDF7f961e08e3f01`
-- **WBTC Hub**: `0xec6595E48933D6f752a6f6421f0a9A019Fb80081`
-- **USDC Hub**: `0xEA1523eB5F0ecDdB1875122aC2c9470a978e3010`
-- **PAXG Hub**: `0xc5eFb9E4EfD91E68948d5039819494Eea56FFA46`
-- **PECTO Hub**: `0xdAE486e75Cdf40bd9B2A0086dCf66e2d6C4e784b`
-- **Arb Entrypoint**: `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789`
-
-## Özel İzleme
-
-- **💰 Özel Cüzdan**: `0x049A025EA9e0807f2fd38c62923fCe688cBd8460`
-  - Bu cüzdandan gelen/giden 250$ ve üzeri transferler özel bildirim alır
-  - USD değeri otomatik hesaplanır (USDT, WETH, WBTC için)
-
-## Token Kontratları
-
-- **USDT**: `0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9`
-- **WETH**: `0x82aF49447D8a07e3bd95BD0d56f35241523fBab1`
-- **WBTC**: `0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`
-
-## Loglar
-
-Uygulama çalıştığında aşağıdaki logları göreceksiniz:
-
-```
-🚀 Uygulama başladı!
-📡 Event dinleme aktif
-🌐 HTTP API aktif
-🤖 Telegram bot aktif
-```
-
-## Geliştirme
-
-### Proje Yapısı
-
-```
-├── main.go                 # Ana uygulama
-├── listener/
-│   ├── event_watcher.go    # Event dinleme
-│   ├── balance.go          # Balance işlemleri
-│   ├── wallets.go          # Kontrat adresleri
-│   └── config.go           # Konfigürasyon
-├── notifier/
-│   ├── interface.go        # Notifier interface
-│   ├── telegram.go         # Telegram notifier
-│   ├── telegram_bot.go     # Telegram bot
-│   └── telelog.go          # Telegram log writer
-└── internal/app/
-    └── api.go              # HTTP API
-```
-
-### Yeni Token Ekleme
-
-1. `listener/balance.go` dosyasında `TokenContracts` ve `HubContracts` map'lerine yeni token'ı ekleyin
-2. `formatBalance` fonksiyonunda decimal sayısını ayarlayın
-3. `internal/app/api.go` dosyasında desteklenen token listesine ekleyin
-4. `notifier/telegram_bot.go` dosyasında yeni komut ekleyin
+Uygulama açılışında bu tx için from/to, değer ve uygunsuzluklar loglanır.
+Önemli Notlar
+Stablecoin’ler (USDC/USDT) güvenlik nedeniyle 1.0 USD’a sabitlenir. Anomali gelirse loglanır.
+Bilinmeyen token’lar için fiyat hesaplaması devre dışı; sadece bilinen token listesi üzerinden USD tahmini yapılır.
+RPC sağlayıcınız subscribe/push desteklemiyorsa otomatik polling moduna geçilir.
+Geliştirme
+İzlenen adresler ve kategori etiketleri listener/wallets.go içindeki prodWallets / testWallets dizilerinden gelir.
+Token sembolleri ve ondalıkları listener/event_watcher.go içindeki tokenSymbols ve tokenDecimals map’lerinde.
+Global event imzaları initGlobalEvents() içinde tanımlı, ABI’lerden de isimler yüklenir.

@@ -1508,7 +1508,8 @@ func subscribeTransferSideWithReconnect(client *ethclient.Client, topicIndex int
 
 // HTTP polling ile transferleri tarar (topicIndex=1: from, 2: to)
 func pollTransfers(ctx context.Context, client *ethclient.Client, topicIndex int) {
-	interval := 1 * time.Second
+	// Optimize edilmiş transfer polling: 5 saniye aralık, 100-300 blok aralığı
+	interval := 5 * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -1533,7 +1534,7 @@ func pollTransfers(ctx context.Context, client *ethclient.Client, topicIndex int
 		return ethereum.FilterQuery{FromBlock: from, ToBlock: to, Topics: topics}
 	}
 
-	log.Printf("🧭 Transfer polling başlatıldı. Başlangıç head=%d, aralık=%s (topicIndex=%d)", last, interval, topicIndex)
+	log.Printf("🧭 Optimize edilmiş transfer polling başlatıldı. Başlangıç head=%d, aralık=%s, blok aralığı=100-300 (topicIndex=%d)", last, interval, topicIndex)
 
 	for {
 		select {
@@ -1549,25 +1550,44 @@ func pollTransfers(ctx context.Context, client *ethclient.Client, topicIndex int
 			if cur <= last {
 				continue
 			}
+
+			// Blok aralığını hesapla (100-300 arası)
+			blockRange := cur - last
+			if blockRange > 300 {
+				blockRange = 300 // Maksimum 300 blok
+			} else if blockRange < 100 {
+				// Eğer 100'den az blok varsa, biraz daha bekle
+				continue
+			}
+
 			from := big.NewInt(int64(last + 1))
-			to := big.NewInt(int64(cur))
+			to := big.NewInt(int64(last + blockRange))
+
+			log.Printf("🔍 Transfer blok aralığı taranıyor: %d-%d (%d blok, topicIndex=%d)", from.Int64(), to.Int64(), blockRange, topicIndex)
+
 			q := buildQuery(from, to)
 			logs, err := client.FilterLogs(ctx, q)
 			if err != nil {
 				log.Printf("⚠️ Transfer polling log hatası (%d-%d): %v", from.Int64(), to.Int64(), err)
 				continue
 			}
+
+			if len(logs) > 0 {
+				log.Printf("📊 %d transfer event bulundu (%d-%d aralığında, topicIndex=%d)", len(logs), from.Int64(), to.Int64(), topicIndex)
+			}
+
 			for _, lg := range logs {
 				handleLiveEvent(lg)
 			}
-			last = cur
+			last = last + blockRange
 		}
 	}
 }
 
 // HTTP RPC üzerinde subscribe desteklenmiyorsa, periyodik olarak yeni blok aralığını tarar
 func pollLogs(ctx context.Context, client *ethclient.Client) {
-	interval := 1 * time.Second
+	// Optimize edilmiş polling: 3-5 saniye aralık, 100-300 blok aralığı
+	interval := 4 * time.Second // 4 saniye aralık
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -1577,7 +1597,7 @@ func pollLogs(ctx context.Context, client *ethclient.Client) {
 		head = 0
 	}
 	last := head
-	log.Printf("🧭 Polling başlatıldı. Başlangıç head=%d, aralık=%s", last, interval)
+	log.Printf("🧭 Optimize edilmiş polling başlatıldı. Başlangıç head=%d, aralık=%s, blok aralığı=100-300", last, interval)
 
 	for {
 		select {
@@ -1594,18 +1614,35 @@ func pollLogs(ctx context.Context, client *ethclient.Client) {
 				continue
 			}
 
+			// Blok aralığını hesapla (100-300 arası)
+			blockRange := cur - last
+			if blockRange > 300 {
+				blockRange = 300 // Maksimum 300 blok
+			} else if blockRange < 100 {
+				// Eğer 100'den az blok varsa, biraz daha bekle
+				continue
+			}
+
 			from := big.NewInt(int64(last + 1))
-			to := big.NewInt(int64(cur))
+			to := big.NewInt(int64(last + blockRange))
+
+			log.Printf("🔍 Blok aralığı taranıyor: %d-%d (%d blok)", from.Int64(), to.Int64(), blockRange)
+
 			q := ethereum.FilterQuery{FromBlock: from, ToBlock: to, Addresses: WatchAddresses}
 			logs, err := client.FilterLogs(ctx, q)
 			if err != nil {
 				log.Printf("⚠️ Polling log hatası (%d-%d): %v", from.Int64(), to.Int64(), err)
 				continue
 			}
+
+			if len(logs) > 0 {
+				log.Printf("📊 %d event bulundu (%d-%d aralığında)", len(logs), from.Int64(), to.Int64())
+			}
+
 			for _, lg := range logs {
 				handleLiveEvent(lg)
 			}
-			last = cur
+			last = last + blockRange
 		}
 	}
 }
@@ -1702,7 +1739,8 @@ func StartEventListener() {
 // Yalnızca bizim adreslerimiz (from/to) ile ilgili işlemleri bildirir
 func startNativeTxScanner(client *ethclient.Client) {
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		// Native ETH tarayıcısını da optimize et: 3 saniye aralık
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 
 		ctx := context.Background()

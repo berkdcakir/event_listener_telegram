@@ -117,6 +117,19 @@ func main() {
 		log.Println("✅ ARBITRUM_RPC:", v)
 	}
 
+	// Cloud deployment için API ayarları
+	if v := os.Getenv("API_HOST"); v == "" {
+		log.Println("ℹ️ API_HOST ayarlanmamış (varsayılan: 0.0.0.0)")
+	} else {
+		log.Println("✅ API_HOST:", v)
+	}
+
+	if v := os.Getenv("API_PORT"); v == "" {
+		log.Println("ℹ️ API_PORT ayarlanmamış (varsayılan: 8080)")
+	} else {
+		log.Println("✅ API_PORT:", v)
+	}
+
 	// Debug mode kontrolü
 	if v := os.Getenv("DEBUG_MODE"); v == "" {
 		log.Println("ℹ️ DEBUG_MODE ayarlanmamış (varsayılan: false)")
@@ -135,8 +148,16 @@ func main() {
 		if port == "" {
 			port = "8080"
 		}
-		log.Printf("🌐 HTTP API başlatılıyor: :%s", port)
-		if err := router.Run(":" + port); err != nil {
+
+		// Cloud deployment için host binding
+		host := os.Getenv("API_HOST")
+		if host == "" {
+			host = "0.0.0.0" // Cloud'da tüm interface'leri dinle
+		}
+
+		addr := host + ":" + port
+		log.Printf("🌐 HTTP API başlatılıyor: %s", addr)
+		if err := router.Run(addr); err != nil {
 			log.Printf("❌ HTTP API hatası: %v", err)
 		}
 	}()
@@ -156,13 +177,38 @@ func main() {
 
 		// Bot mesajlarını dinle
 		offset := 0
+		consecutiveErrors := 0
+		maxConsecutiveErrors := 10
+
 		for {
 			updates, err := bot.GetUpdates(offset)
 			if err != nil {
-				log.Printf("❌ Bot update hatası: %v", err)
-				time.Sleep(5 * time.Second)
+				consecutiveErrors++
+				errMsg := err.Error()
+
+				// Conflict hatası için özel işlem
+				if strings.Contains(errMsg, "409 Conflict") {
+					log.Printf("⚠️ Bot conflict hatası - diğer instance çalışıyor olabilir. 30 saniye beklenecek...")
+					time.Sleep(30 * time.Second)
+					consecutiveErrors = 0 // Reset error count
+					continue
+				}
+
+				log.Printf("❌ Bot update hatası (%d/%d): %v", consecutiveErrors, maxConsecutiveErrors, err)
+
+				// Çok fazla hata varsa daha uzun bekle
+				if consecutiveErrors >= maxConsecutiveErrors {
+					log.Printf("⚠️ Çok fazla hata, 60 saniye beklenecek...")
+					time.Sleep(60 * time.Second)
+					consecutiveErrors = 0
+				} else {
+					time.Sleep(5 * time.Second)
+				}
 				continue
 			}
+
+			// Başarılı istek - hata sayacını sıfırla
+			consecutiveErrors = 0
 
 			for _, update := range updates {
 				if update.Message.Text != "" {
@@ -174,7 +220,7 @@ func main() {
 				offset = update.UpdateID + 1
 			}
 
-			time.Sleep(1 * time.Second)
+			time.Sleep(2 * time.Second) // Cloud'da biraz daha yavaş
 		}
 	}()
 

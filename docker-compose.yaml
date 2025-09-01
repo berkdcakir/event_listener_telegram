@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8081:8080"
+      - "8080:8080"  # Cloud deployment için 8080 portu
     working_dir: /app
     env_file:
       - .env
@@ -15,3 +15,7 @@ services:
       - ./:/app:rw
     environment:
       - GIN_MODE=release
+      - API_HOST=0.0.0.0  # Cloud deployment için tüm interface'leri dinle
+      - API_PORT=8080
+      - BACKEND_API_URL=http://3.226.134.195:8080
+    restart: unless-stopped  # Cloud deployment için otomatik restart
