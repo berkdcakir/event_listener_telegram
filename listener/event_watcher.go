@@ -56,13 +56,14 @@ func init() {
 	_ = formatEventMessage
 	var _ = transferDetails{}
 	_ = parseTransferDetails
-	_ = estimateUSDValue
+	_ = EstimateUSDValue
 	_ = formatWei
 	_ = handleLiveEvent
 	_ = bootstrapScanWindowed
 	_ = subscribeWithReconnect
 	_ = pollLogs
 	_ = TestImportanceFiltering
+	_ = escapeMarkdownV2NonCode
 }
 
 // adres->(topic0->event adı)
@@ -241,9 +242,18 @@ func InitNotifiersWithBot() {
 
 // SendNotificationToAllNotifiers tüm aktif notifier'lara bildirim gönderir
 func SendNotificationToAllNotifiers(title, body string) {
-	// Markdown formatında kalın başlık
+	// Markdown formatında kalın başlık (sadece başlık kalın kalsın)
 	formattedTitle := "*" + escapeMarkdownV2(title) + "*"
-	message := fmt.Sprintf("%s\n\n%s", formattedTitle, body)
+
+	// Gövde sanitizasyonu: Telegram MarkdownV2 code block'unu bozabilecek karakterleri etkisizleştir
+	// - İçerikte olası üç backtick (```) kaçırılır/yumuşatılır
+	// - Tek backtick'ler code block içinde gereksiz olduğu için kaldırılır
+	sanitizedBody := body
+	sanitizedBody = strings.ReplaceAll(sanitizedBody, "```", "'''")
+	sanitizedBody = strings.ReplaceAll(sanitizedBody, "`", "'")
+
+	// Gövdeyi MarkdownV2 preformatted code block içinde gönder
+	message := fmt.Sprintf("%s\n\n```\n%s\n```", formattedTitle, sanitizedBody)
 
 	// Mevcut notifier'ları kullan
 	for _, n := range notifiers {
@@ -360,32 +370,27 @@ func determineImportance(title, body string) bool {
 		return true
 	}
 
-	// 3) Transfer eventleri: Tek USD eşiği (env ile değiştirilebilir)
-	if strings.Contains(title, "Transfer") {
-		// USD değerini çıkar
+	// 3) USD eşiği: Başlıktan bağımsız, gövdede $ tutarı varsa uygula (ERC20/NATIVE başlıkları dahil)
+	{
 		usd := extractUSDFromBody(body)
-
-		// USD eşiği: varsayılan 50$, env ile değiştirilebilir
-		threshold := 50.0
-		if v := strings.TrimSpace(os.Getenv("USD_THRESHOLD")); v != "" {
-			if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-				threshold = f
+		if usd > 0 {
+			threshold := 50.0
+			if v := strings.TrimSpace(os.Getenv("USD_THRESHOLD")); v != "" {
+				if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+					threshold = f
+				}
 			}
-		}
-
-		isImportant := usd >= threshold
-
-		if strings.ToLower(os.Getenv("DEBUG_MODE")) == "true" {
-			log.Printf("💰 Transfer USD: $%.2f, Eşik: $%.2f, Önemli: %v", usd, threshold, isImportant)
-
+			isImportant := usd >= threshold
+			if strings.ToLower(os.Getenv("DEBUG_MODE")) == "true" {
+				log.Printf("💰 USD: $%.8f, Eşik: $%.8f, Önemli: %v", usd, threshold, isImportant)
+				if isImportant {
+					log.Printf("✅ USD eşiği aşıldı - ÖNEMLİ (Grup 2)")
+				}
+			}
 			if isImportant {
-				log.Printf("✅ Transfer önemli tespit edildi - ÖNEMLİ (Grup 2)")
-			} else {
-				log.Printf("ℹ️ Transfer normal tespit edildi - NORMAL (Grup 1)")
+				return true
 			}
 		}
-
-		return isImportant
 	}
 
 	// 4) Diğer tüm eventler önemsiz (grup 1'e gidecek)
@@ -447,14 +452,14 @@ func getChatID() int64 {
 	if chatIDStr == "" {
 		return 0
 	}
-
+	// Tırnak/boşluk temizle
+	chatIDStr = strings.TrimSpace(strings.Trim(chatIDStr, "\"'"))
 	// String'i int64'e çevir
 	chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
 	if err != nil {
 		log.Printf("⚠️ TELEGRAM_CHAT_ID parse hatası: %v", err)
 		return 0
 	}
-
 	return chatID
 }
 
@@ -464,6 +469,8 @@ func getChatID2() int64 {
 	if chatIDStr == "" {
 		return 0
 	}
+	// Tırnak/boşluk temizle
+	chatIDStr = strings.TrimSpace(strings.Trim(chatIDStr, "\"'"))
 	chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
 	if err != nil {
 		log.Printf("⚠️ TELEGRAM_CHAT_ID_2 parse hatası: %v", err)
@@ -485,6 +492,34 @@ func escapeMarkdownV2(text string) string {
 	}
 
 	return result
+}
+
+// escapeMarkdownV2NonCode: backtick içindeki (code) kısımları olduğu gibi bırakıp
+// code dışındaki kısımları MarkdownV2 kurallarına göre kaçırır.
+func escapeMarkdownV2NonCode(text string) string {
+	var b strings.Builder
+	inCode := false
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if ch == '`' {
+			// backtick'i geçir ve mod değiştir
+			b.WriteByte(ch)
+			inCode = !inCode
+			continue
+		}
+		if inCode {
+			b.WriteByte(ch)
+			continue
+		}
+		s := string(ch)
+		switch s {
+		case "_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!":
+			b.WriteString("\\" + s)
+		default:
+			b.WriteByte(ch)
+		}
+	}
+	return b.String()
 }
 
 // TestImportanceFiltering filtreleme mantığını test etmek için yardımcı fonksiyon
@@ -531,7 +566,7 @@ func formatEventMessage(lg types.Log) (string, string) {
 	if len(lg.Topics) > 0 && lg.Topics[0] == moduleInstalledTopic {
 		moduleId := hex.EncodeToString(lg.Data)
 		title := "🔴 [" + cat + "] InstallModule"
-		body := fmt.Sprintf("📋 **Tx:** `%s`\n🔧 **Modül:** `%s`\n⏰ **Zaman:** `%s`", tx, moduleId, time.Now().Format("02.01.2006 15:04:05"))
+		body := fmt.Sprintf("📋 *Tx:* `%s`\n🔧 *Modül:* `%s`\n⏰ *Zaman:* `%s`", tx, moduleId, time.Now().Format("02.01.2006 15:04:05"))
 		return title, body
 	}
 
@@ -546,9 +581,9 @@ func formatEventMessage(lg types.Log) (string, string) {
 				return "", ""
 			}
 			var body strings.Builder
-			body.WriteString(fmt.Sprintf("📋 **Tx:** `%s`\n", tx))
-			body.WriteString(fmt.Sprintf("📤 **From:** `%s`\n", d.from.Hex()))
-			body.WriteString(fmt.Sprintf("📥 **To:** `%s`\n", d.to.Hex()))
+			body.WriteString(fmt.Sprintf("📋 *Tx:* `%s`\n", tx))
+			body.WriteString(fmt.Sprintf("📤 *From:* `%s`\n", d.from.Hex()))
+			body.WriteString(fmt.Sprintf("📥 *To:* `%s`\n", d.to.Hex()))
 			// Token sembolü ve doğru ondalıkla değer
 			sym := getAssetSymbol(lg.Address)
 			dec := getTokenDecimals(lg.Address)
@@ -572,17 +607,17 @@ func formatEventMessage(lg types.Log) (string, string) {
 			}
 
 			if sym != "" {
-				body.WriteString(fmt.Sprintf("💰 **Value:** `%s %s`\n", formatTokenAmount(d.value, dec), sym))
+				body.WriteString(fmt.Sprintf("💰 *Value:* `%s %s`\n", formatTokenAmount(d.value, dec), sym))
 			} else {
-				body.WriteString(fmt.Sprintf("💰 **Value:** `%s`\n", formatTokenAmount(d.value, dec)))
+				body.WriteString(fmt.Sprintf("💰 *Value:* `%s`\n", formatTokenAmount(d.value, dec)))
 			}
 			if d.usdValue > 0 {
-				body.WriteString(fmt.Sprintf("💵 **USD:** `~$%.2f`\n", d.usdValue))
+				body.WriteString(fmt.Sprintf("💵 *USD:* `~$%.2f`\n", d.usdValue))
 			}
 			if d.isSpecialWalletInvolved {
-				body.WriteString("🚨 **ÖZEL CÜZDAN İLGİLİ**\n")
+				body.WriteString("🚨 *ÖZEL CÜZDAN İLGİLİ*\n")
 			}
-			body.WriteString(fmt.Sprintf("⏰ **Zaman:** `%s`", time.Now().Format("02.01.2006 15:04:05")))
+			body.WriteString(fmt.Sprintf("⏰ *Zaman:* `%s`", time.Now().Format("02.01.2006 15:04:05")))
 
 			// Önem tespiti (emoji seçimi)
 			computedBody := body.String()
@@ -608,12 +643,12 @@ func formatEventMessage(lg types.Log) (string, string) {
 	// DiamondCut'i InstallModule olarak ele al (önemli kabul edilecek)
 	if strings.EqualFold(eventName, "DiamondCut") {
 		title := "🔴 [" + cat + "] InstallModule"
-		body := fmt.Sprintf("📋 **Tx:** `%s`\n⚙️ **Event:** `DiamondCut→InstallModule`\n⏰ **Zaman:** `%s`", tx, time.Now().Format("02.01.2006 15:04:05"))
+		body := fmt.Sprintf("📋 *Tx:* `%s`\n⚙️ *Event:* `DiamondCut→InstallModule`\n⏰ *Zaman:* `%s`", tx, time.Now().Format("02.01.2006 15:04:05"))
 		return title, body
 	}
 
 	title := "🔵 [" + cat + "] " + eventName // Normal (Grup 1)
-	body := fmt.Sprintf("📋 **Tx:** `%s`\n⏰ **Zaman:** `%s`", tx, time.Now().Format("02.01.2006 15:04:05"))
+	body := fmt.Sprintf("📋 *Tx:* `%s`\n⏰ *Zaman:* `%s`", tx, time.Now().Format("02.01.2006 15:04:05"))
 	return title, body
 }
 
@@ -641,7 +676,7 @@ func parseTransferDetails(lg types.Log) *transferDetails {
 		value = big.NewInt(0)
 	}
 
-	usd := estimateUSDValue(value, lg.Address)
+	usd := EstimateUSDValue(value, lg.Address)
 	return &transferDetails{
 		from:                    from,
 		to:                      to,
@@ -656,8 +691,8 @@ func isSpecialTransfer(from, to common.Address) bool {
 	return from == specialWallet || to == specialWallet
 }
 
-// estimateUSDValue yaklaşık USD değerini hesaplar
-func estimateUSDValue(value *big.Int, tokenAddr common.Address) float64 {
+// EstimateUSDValue yaklaşık USD değerini hesaplar
+func EstimateUSDValue(value *big.Int, tokenAddr common.Address) float64 {
 	// Debug: Gelen token adresi
 	log.Printf("🔍 estimateUSDValue: token=%s, value=%s", tokenAddr.Hex(), value.String())
 
@@ -1232,7 +1267,7 @@ func tryBuildNativeTransferNotification(lg types.Log) (string, string, bool) {
 	}
 
 	title := emoji + " [" + cat + "] Transfer (ETH)"
-	body := fmt.Sprintf("📋 **Tx:** `%s`\n📤 **From:** `%s`\n📥 **To:** `%s`\n💰 **Value:** `%s ETH`\n🏷️ **Dir:** `%s`\n⏰ **Zaman:** `%s`",
+	body := fmt.Sprintf("📋 *Tx:* `%s`\n📤 *From:* `%s`\n📥 *To:* `%s`\n💰 *Value:* `%s ETH`\n🏷️ *Dir:* `%s`\n⏰ *Zaman:* `%s`",
 		lg.TxHash.Hex(), fromAddr, toAddr, valStr, dir, time.Now().Format("02.01.2006 15:04:05"))
 
 	nativeSeen[txh] = time.Now()
@@ -1305,7 +1340,7 @@ func sendGroupedNotifications(notifications []notificationItem) {
 
 	for i, item := range notifications {
 		// Liste numarasındaki nokta (.) MarkdownV2 için kaçırılmalı
-		body.WriteString(fmt.Sprintf("**%d\\.** %s\n%s\n\n", i+1, item.title, item.body))
+		body.WriteString(fmt.Sprintf("*%d\\.* %s\n%s\n\n", i+1, escapeMarkdownV2(item.title), item.body))
 	}
 
 	SendNotificationToAllNotifiers(title, body.String())
@@ -1508,8 +1543,8 @@ func subscribeTransferSideWithReconnect(client *ethclient.Client, topicIndex int
 
 // HTTP polling ile transferleri tarar (topicIndex=1: from, 2: to)
 func pollTransfers(ctx context.Context, client *ethclient.Client, topicIndex int) {
-	// Optimize edilmiş transfer polling: 5 saniye aralık, 100-300 blok aralığı
-	interval := 5 * time.Second
+	// Optimize edilmiş transfer polling: 3 saniye aralık, 100-300 blok aralığı
+	interval := 3 * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -1553,8 +1588,8 @@ func pollTransfers(ctx context.Context, client *ethclient.Client, topicIndex int
 
 			// Blok aralığını hesapla (100-300 arası)
 			blockRange := cur - last
-			if blockRange > 300 {
-				blockRange = 300 // Maksimum 300 blok
+			if blockRange > 500 {
+				blockRange = 500 // Maksimum 500 blok
 			} else if blockRange < 100 {
 				// Eğer 100'den az blok varsa, biraz daha bekle
 				continue
@@ -1586,8 +1621,8 @@ func pollTransfers(ctx context.Context, client *ethclient.Client, topicIndex int
 
 // HTTP RPC üzerinde subscribe desteklenmiyorsa, periyodik olarak yeni blok aralığını tarar
 func pollLogs(ctx context.Context, client *ethclient.Client) {
-	// Optimize edilmiş polling: 3-5 saniye aralık, 100-300 blok aralığı
-	interval := 4 * time.Second // 4 saniye aralık
+	// Optimize edilmiş polling: 3 saniye aralık, 100-300 blok aralığı
+	interval := 3 * time.Second // 3 saniye aralık
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -1616,8 +1651,8 @@ func pollLogs(ctx context.Context, client *ethclient.Client) {
 
 			// Blok aralığını hesapla (100-300 arası)
 			blockRange := cur - last
-			if blockRange > 300 {
-				blockRange = 300 // Maksimum 300 blok
+			if blockRange > 500 {
+				blockRange = 500 // Maksimum 500 blok
 			} else if blockRange < 100 {
 				// Eğer 100'den az blok varsa, biraz daha bekle
 				continue
@@ -1869,7 +1904,7 @@ func startNativeTxScanner(client *ethclient.Client) {
 								effGas = gwei.Text('f', 2) + " gwei"
 							}
 						}
-						body := fmt.Sprintf("📋 **Tx:** `%s`\n📤 **From:** `%s`\n📥 **To:** `%s`\n💰 **Value:** `%s ETH`\n💵 **USD:** `%s`\n🏷️ **Dir:** `%s`\n📊 **Status:** `%s`\n⛽ **Gas:** `%s`\n⏰ **Zaman:** `%s`",
+						body := fmt.Sprintf("📋 *Tx:* `%s`\n📤 *From:* `%s`\n📥 *To:* `%s`\n💰 *Value:* `%s ETH`\n💵 *USD:* `%s`\n🏷️ *Dir:* `%s`\n📊 *Status:* `%s`\n⛽ *Gas:* `%s`\n⏰ *Zaman:* `%s`",
 							txh, fromAddr, toAddr, valStr, usdStr, dir, status, effGas, time.Now().Format("02.01.2006 15:04:05"))
 						// Emoji seçimi
 						imp := determineImportance("[ETH] Transfer (ETH)", body)
@@ -1948,7 +1983,7 @@ func startNativeTxScanner(client *ethclient.Client) {
 							effGas = gwei.Text('f', 2) + " gwei"
 						}
 					}
-					body := fmt.Sprintf("📋 **Tx:** `%s`\n📤 **From:** `%s`\n📥 **To:** `%s`\n💰 **Value:** `%s ETH`\n💵 **USD:** `%s`\n🏷️ **Dir:** `%s`\n📊 **Status:** `%s`\n⛽ **Gas:** `%s`\n⏰ **Zaman:** `%s`",
+					body := fmt.Sprintf("📋 *Tx:* `%s`\n📤 *From:* `%s`\n📥 *To:* `%s`\n💰 *Value:* `%s ETH`\n💵 *USD:* `%s`\n🏷️ *Dir:* `%s`\n📊 *Status:* `%s`\n⛽ *Gas:* `%s`\n⏰ *Zaman:* `%s`",
 						txh, fromAddr, toAddr, valStr, usdStr, dir, status, effGas, time.Now().Format("02.01.2006 15:04:05"))
 					// Emoji seçimi
 					imp := determineImportance("[ETH] Transfer (ETH)", body)

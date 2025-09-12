@@ -23,6 +23,7 @@ var prodWallets = []walletEntry{
 	{addr: "0xEA1523eB5F0ecDdB1875122aC2c9470a978e3010", label: "USDC Hub"},
 	{addr: "0xc5eFb9E4EfD91E68948d5039819494Eea56FFA46", label: "PAXG Hub"},
 	{addr: "0xdAE486e75Cdf40bd9B2A0086dCf66e2d6C4e784b", label: "PECTO Hub"},
+	{addr: "0x5794D53F414b24dAE376a3228C52D20b41C11dF2", label: "Gnosis"},
 }
 
 // Test cüzdanları

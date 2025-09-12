@@ -64,6 +64,7 @@ func (t *Telegram) Notify(text string) error {
 	payload := sendReq{
 		ChatID:                t.chatID,
 		Text:                  text,
+		ParseMode:             "MarkdownV2",
 		DisableWebPagePreview: true,
 	}
 	body, _ := json.Marshal(&payload)

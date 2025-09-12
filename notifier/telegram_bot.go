@@ -67,29 +67,50 @@ func NewTelegramBot() (*TelegramBot, error) {
 // SendMessage mesaj gönderir
 func (t *TelegramBot) SendMessage(chatID int, text string) error {
 	payload := map[string]interface{}{
-		"chat_id":    chatID,
-		"text":       text,
-		"parse_mode": "MarkdownV2",
+		"chat_id": chatID,
+		"text":    text,
+		// MarkdownV2 ile kalın/italik vs. doğru render edilsin
+		"parse_mode":               "MarkdownV2",
+		"disable_web_page_preview": true,
 	}
 
-	body, _ := json.Marshal(payload)
 	url := t.apiBase + "/sendMessage"
 
+	// İlk deneme: MarkdownV2
+	body, _ := json.Marshal(payload)
 	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-
 	resp, err := t.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == 200 {
+			return nil
+		}
 		b, _ := io.ReadAll(resp.Body)
+		// MarkdownV2 parse hatası ise düz metin fallback
+		if resp.StatusCode == 400 && strings.Contains(string(b), "can't parse entities") {
+			payload2 := map[string]interface{}{
+				"chat_id":                  chatID,
+				"text":                     text,
+				"disable_web_page_preview": true,
+			}
+			body2, _ := json.Marshal(payload2)
+			req2, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body2))
+			req2.Header.Set("Content-Type", "application/json")
+			resp2, err2 := t.httpClient.Do(req2)
+			if err2 == nil {
+				defer resp2.Body.Close()
+				if resp2.StatusCode == 200 {
+					return nil
+				}
+				b2, _ := io.ReadAll(resp2.Body)
+				return fmt.Errorf("telegram API hatası (fallback): %s - %s", resp2.Status, string(b2))
+			}
+			return err2
+		}
 		return fmt.Errorf("telegram API hatası: %s - %s", resp.Status, string(b))
 	}
-
-	return nil
+	return err
 }
 
 // SendMessageWithKeyboard: parse_mode olmadan, tıklanabilir Reply Keyboard ile mesaj gönderir
@@ -470,6 +491,16 @@ func escapeMarkdownV2(text string) string {
 	return result
 }
 
+// escapeMarkdownV2Code: inline code (\`) içinde yalnızca gerekli karakterleri kaçır
+// Telegram MarkdownV2'de inline code içinde sadece ters bölü (\\) ve backtick (\`) kaçırılmalıdır
+func escapeMarkdownV2Code(text string) string {
+	// Önce ters bölüyü kaçır
+	text = strings.ReplaceAll(text, "\\", "\\\\")
+	// Sonra backtick'i kaçır
+	text = strings.ReplaceAll(text, "`", "\\`")
+	return text
+}
+
 // formatBold kalın metin formatı
 func formatBold(text string) string {
 	return "*" + escapeMarkdownV2(text) + "*"
@@ -477,5 +508,5 @@ func formatBold(text string) string {
 
 // formatCode kod formatı
 func formatCode(text string) string {
-	return "`" + escapeMarkdownV2(text) + "`"
+	return "`" + escapeMarkdownV2Code(text) + "`"
 }

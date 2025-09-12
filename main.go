@@ -227,14 +227,10 @@ func main() {
 	// Bildirim sistemini başlat (bot instance'ı ile entegre)
 	listener.InitNotifiersWithBot()
 
-	// Filtreleme mantığını test et
-	listener.TestImportanceFiltering()
-
-	// Event listener'ı başlat
-	go listener.StartEventListener()
+	// Event listener devre dışı: Eventler viem-watcher üzerinden /notify ile alınacak
+	log.Println("🔔 Event kaynağı: viem-watcher -> /notify")
 
 	log.Println("🚀 Uygulama başladı!")
-	log.Println("📡 Event dinleme aktif")
 	log.Println("🌐 HTTP API aktif")
 	log.Println("🤖 Telegram bot aktif")
 

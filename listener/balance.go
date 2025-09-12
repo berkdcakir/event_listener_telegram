@@ -37,11 +37,49 @@ type BalanceResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// getRPCURL: ARBITRUM_RPC yoksa alternatif env'leri dener; Ankr key ekler
+func getRPCURL() (string, error) {
+	candidate := func(v string) string {
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return ""
+		}
+		// Satır başı '#' veya tümüyle yorum gibi görünen değerleri yok say
+		if strings.HasPrefix(s, "#") {
+			return ""
+		}
+		return s
+	}
+
+	rpcUrl := candidate(os.Getenv("ARBITRUM_RPC"))
+	if rpcUrl == "" {
+		rpcUrl = candidate(os.Getenv("ARBITRUM_HTTP_RPC"))
+	}
+	if rpcUrl == "" {
+		rpcUrl = candidate(os.Getenv("RPC_HTTP"))
+	}
+	if rpcUrl == "" {
+		rpcUrl = candidate(os.Getenv("ANKR_HTTP"))
+	}
+	if rpcUrl == "" {
+		return "", fmt.Errorf("RPC URL not set (ARBITRUM_RPC/ARBITRUM_HTTP_RPC/RPC_HTTP/ANKR_HTTP)")
+	}
+	low := strings.ToLower(rpcUrl)
+	if strings.Contains(low, "rpc.ankr.com/arbitrum") && !strings.Contains(low, "/") {
+		if key := candidate(os.Getenv("ANKR_API_KEY")); key != "" {
+			if !strings.HasSuffix(rpcUrl, "/"+key) {
+				rpcUrl = strings.TrimRight(rpcUrl, "/") + "/" + key
+			}
+		}
+	}
+	return rpcUrl, nil
+}
+
 // GetTokenBalance belirtilen token'ın balance'ını döner
 func GetTokenBalance(token string) (*BalanceResponse, error) {
-	rpcUrl := os.Getenv("ARBITRUM_RPC")
-	if rpcUrl == "" {
-		return nil, fmt.Errorf("ARBITRUM_RPC ortam değişkeni tanımlı değil")
+	rpcUrl, err := getRPCURL()
+	if err != nil {
+		return nil, err
 	}
 
 	client, err := ethclient.Dial(rpcUrl)
@@ -131,9 +169,9 @@ func GetTokenBalance(token string) (*BalanceResponse, error) {
 
 // GetMainBalance ana kontratın ETH balance'ını döner
 func GetMainBalance() (*BalanceResponse, error) {
-	rpcUrl := os.Getenv("ARBITRUM_RPC")
-	if rpcUrl == "" {
-		return nil, fmt.Errorf("ARBITRUM_RPC ortam değişkeni tanımlı değil")
+	rpcUrl, err := getRPCURL()
+	if err != nil {
+		return nil, err
 	}
 
 	client, err := ethclient.Dial(rpcUrl)
@@ -167,9 +205,9 @@ func GetMainBalance() (*BalanceResponse, error) {
 
 // GetMainTokenBalance ana kontratın belirtilen token balance'ını döner
 func GetMainTokenBalance(token string) (*BalanceResponse, error) {
-	rpcUrl := os.Getenv("ARBITRUM_RPC")
-	if rpcUrl == "" {
-		return nil, fmt.Errorf("ARBITRUM_RPC ortam değişkeni tanımlı değil")
+	rpcUrl, err := getRPCURL()
+	if err != nil {
+		return nil, err
 	}
 
 	client, err := ethclient.Dial(rpcUrl)

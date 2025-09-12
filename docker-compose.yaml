@@ -19,3 +19,23 @@ services:
       - API_PORT=8080
       - BACKEND_API_URL=http://3.226.134.195:8080
     restart: unless-stopped  # Cloud deployment için otomatik restart
+
+  viem-watcher:
+    image: node:20-alpine
+    container_name: viem-watcher
+    working_dir: /app/viem-watcher
+    volumes:
+      - ./:/app:rw
+    environment:
+      - RPC_HTTP=${ARBITRUM_HTTP_RPC}
+      - NOTIFIER_URL=http://goapp:8080/notify
+      - POLL_MS=5000
+      - CHUNK_BLOCKS=3500
+      - CONFIRMATIONS=12
+      - START_BLOCK=latest
+      - WATCH_ADDRESSES=${WATCH_ADDRESSES}
+      - TOKEN_LIST=${TOKEN_LIST}
+    command: sh -c "cd /app/viem-watcher && npm i --no-audit --no-fund --silent && npm run start"
+    depends_on:
+      - goapp
+    restart: unless-stopped
