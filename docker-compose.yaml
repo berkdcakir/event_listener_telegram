@@ -1,41 +1,40 @@
-version: "3.8"
-
+version: "3.9"
 services:
-  goapp:
-    container_name: goapp
+  go-sender:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: go-sender/Dockerfile
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      TELEGRAM_CHAT_ID_2: ${TELEGRAM_CHAT_ID_2}
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      WALLET_PROFILE: ${WALLET_PROFILE:-prod}
+      DEBUG_MODE: ${DEBUG_MODE:-false}
     ports:
-      - "8080:8080"  # Cloud deployment için 8080 portu
-    working_dir: /app
-    env_file:
-      - .env
-    volumes:
-      - ./:/app:rw
-    environment:
-      - GIN_MODE=release
-      - API_HOST=0.0.0.0  # Cloud deployment için tüm interface'leri dinle
-      - API_PORT=8080
-      - BACKEND_API_URL=http://3.226.134.195:8080
-    restart: unless-stopped  # Cloud deployment için otomatik restart
+      - "8080:8080"
+    restart: unless-stopped
 
-  viem-watcher:
-    image: node:20-alpine
-    container_name: viem-watcher
-    working_dir: /app/viem-watcher
-    volumes:
-      - ./:/app:rw
+  watcher:
+    build:
+      context: .
+      dockerfile: viem-watcher/Dockerfile
     environment:
-      - RPC_HTTP=${ARBITRUM_HTTP_RPC}
-      - NOTIFIER_URL=http://goapp:8080/notify
-      - POLL_MS=5000
-      - CHUNK_BLOCKS=3500
-      - CONFIRMATIONS=12
-      - START_BLOCK=latest
-      - WATCH_ADDRESSES=${WATCH_ADDRESSES}
-      - TOKEN_LIST=${TOKEN_LIST}
-    command: sh -c "cd /app/viem-watcher && npm i --no-audit --no-fund --silent && npm run start"
+      # RPC/ANKR değişkenleriniz
+      ARBITRUM_HTTP_RPC: ${ARBITRUM_HTTP_RPC}
+      ANKR_API_KEY: ${ANKR_API_KEY}
+      # Go servise bildirim
+      NOTIFIER_URL: http://go-sender:8080/notify
+      BACKEND_API_URL: http://go-sender:8080
+      WATCH_ADDRESSES: ${WATCH_ADDRESSES}
+      TOKEN_LIST: ${TOKEN_LIST}
+      POLL_MS: ${POLL_MS:-3000}
+      CHUNK_BLOCKS: ${CHUNK_BLOCKS:-4000}
+      CONFIRMATIONS: ${CONFIRMATIONS:-12}
+      BACKFILL_BLOCKS: ${BACKFILL_BLOCKS:-0}
+    volumes:
+      - ./listener/abis:/app/listener/abis:ro
     depends_on:
-      - goapp
+      - go-sender
     restart: unless-stopped
