@@ -1,23 +1,21 @@
 FROM golang:1.23-alpine AS build
+
 WORKDIR /src
 
-# go.mod ve go.sum’u kopyala
-COPY go-sender/go.mod go-sender/go.sum ./
+# go.mod ve go.sum aynı klasörde zaten
+COPY go.mod go.sum ./
 RUN go mod download
 
 # kaynak kodu kopyala
-COPY go-sender/ ./
+COPY . .
 
 # derle
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/app .
+RUN go build -o app main.go
 
-# runtime image
+# ---- runtime ----
 FROM gcr.io/distroless/base-debian12
-WORKDIR /app
-COPY --from=build /out/app /app/app
 
-ENV API_HOST=0.0.0.0
-ENV API_PORT=8080
-EXPOSE 8080
+WORKDIR /root/
+COPY --from=build /src/app .
 
-CMD ["/app/app"]
+CMD ["./app"]

@@ -73,6 +73,11 @@ func SetupAPI() *gin.Engine {
 		})
 	})
 
+	// Plain text ping (cron/uptime için hafif yanıt)
+	r.GET("/ping", func(c *gin.Context) {
+		c.String(200, "ok")
+	})
+
 	// Health alias
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})

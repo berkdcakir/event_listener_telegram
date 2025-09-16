@@ -1,7 +1,8 @@
-import { createPublicClient, http, parseAbiItem, decodeEventLog } from 'viem'
+import { createPublicClient, http as viemHttp, parseAbiItem, decodeEventLog } from 'viem'
 import fs from 'fs'
 import path from 'path'
 import { arbitrum } from 'viem/chains'
+import http from 'http'
 
 const RAW_RPC_HTTP = process.env.RPC_HTTP || process.env.ARBITRUM_HTTP_RPC || process.env.ANKR_HTTP
 const ANKR_API_KEY = process.env.ANKR_API_KEY || process.env.ANKR_KEY
@@ -23,11 +24,12 @@ if (RPC_HTTP && /rpc\.ankr\.com\/arbitrum/i.test(RPC_HTTP)) {
   }
 }
 const NOTIFIER_URL = process.env.NOTIFIER_URL || 'http://localhost:8080/notify'
-const POLL_MS = Number(process.env.POLL_MS || 3000)
+const POLL_MS = Number(process.env.POLL_MS || 5000)
 const CHUNK_BLOCKS = Number(process.env.CHUNK_BLOCKS || 4000)
 const CONFIRMATIONS = Number(process.env.CONFIRMATIONS || 12)
 const START_BLOCK = process.env.START_BLOCK || 'latest'
 const BACKFILL_BLOCKS = Number(process.env.BACKFILL_BLOCKS || 0)
+const ENABLE_GENERIC_EVENTS = String(process.env.ENABLE_GENERIC_EVENTS || 'true').toLowerCase() === 'true'
 let WATCH_ADDRESSES = (process.env.WATCH_ADDRESSES || '').split(',').map(a => a.trim()).filter(Boolean)
 const TOKEN_LIST = (process.env.TOKEN_LIST || '').split(',').map(a => a.trim()).filter(Boolean)
 
@@ -67,7 +69,7 @@ if (!RPC_URLS.length) {
   console.error('No RPC URLs configured (set ARBITRUM_HTTP_RPC or ANKR_KEYS/ANKR_API_KEYS or ANKR_KEY_1.. or ANKR_API_KEY_1..)')
   process.exit(1)
 }
-const CLIENTS = RPC_URLS.map(u => createPublicClient({ chain: arbitrum, transport: http(u) }))
+const CLIENTS = RPC_URLS.map(u => createPublicClient({ chain: arbitrum, transport: viemHttp(u) }))
 let CURRENT_IDX = 0
 
 function isRateLimitError(err) {
@@ -211,14 +213,9 @@ async function hydrateFromNotifierIfNeeded() {
 const seenNativeTx = new Map()
 const SEEN_TTL_MS = Number(process.env.SEEN_TTL_MS || 10 * 60 * 1000) // 10dk varsayılan
 
-function pruneSeen() {
-  const now = Date.now()
-  for (const [k, t] of seenNativeTx.entries()) {
-    if (now - t > SEEN_TTL_MS) seenNativeTx.delete(k)
-  }
-}
-
-const NATIVE_MAX_BLOCKS = Number(process.env.NATIVE_MAX_BLOCKS || 120)
+// Native tarama periyodu ve blok sınırı
+const NATIVE_POLL_MS = Number(process.env.NATIVE_POLL_MS || 15000)
+const NATIVE_MAX_BLOCKS = Number(process.env.NATIVE_MAX_BLOCKS || 60)
 
 // --- ABI yükleme: listener/abis altından adres->ABI haritası ---
 const ADDRESS_TO_ABI = new Map()
@@ -312,6 +309,12 @@ async function fetchTokenMeta(addr) {
 async function loop() {
   if (ADDRESS_TO_ABI.size === 0) initLoadAbis()
   await hydrateFromNotifierIfNeeded()
+  // Guard: İzlenecek adres yoksa tarama yapma
+  if (!Array.isArray(WATCH_ADDRESSES) || WATCH_ADDRESSES.length === 0) {
+    // eslint-disable-next-line no-console
+    console.warn('skip scan: WATCH_ADDRESSES is empty')
+    return
+  }
   try {
     await ensureStart()
     const target = await getLatestConfirmed()
@@ -341,8 +344,8 @@ async function loop() {
       filters.push({ address: WATCH_ADDRESSES, event: MODULE_INSTALLED_EVENT })
     }
 
-    // Tüm event'ler (ABI olmasa bile) için adres bazlı genel filtre
-    if (WATCH_ADDRESSES.length > 0) {
+    // İsteğe bağlı: Tüm event'ler için adres bazlı genel filtre (ENV ile kontrol)
+    if (ENABLE_GENERIC_EVENTS && WATCH_ADDRESSES.length > 0) {
       filters.push({ address: WATCH_ADDRESSES })
     }
 
@@ -417,97 +420,71 @@ async function loop() {
               }
             })
           }).catch(() => {})
-        } else {
-          // ABI olmasa bile generic event olarak bildir
-          const topics = Array.isArray(log.topics) ? log.topics : []
-          const topic0 = topics[0] || ''
-          const idxAddrs = extractIndexedAddresses(topics)
-          const addrLabel = shortAddr(log.address)
-          const topicLabel = shortHash(topic0)
-          const title = topicLabel ? `EVENT • ${addrLabel} • ${topicLabel}` : `EVENT • ${addrLabel}`
-          const dataHex = String(log.data || '')
-          await fetch(NOTIFIER_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: 'contract_event',
-              title,
-              addr: log.address,
-              token: 'N/A',
-              txHash: log.transactionHash,
-              block: Number(log.blockNumber),
-              timestamp: 0,
-              meta: {
-                logIndex: Number(log.logIndex),
-                topic0: topic0,
-                topics: topics,
-                indexedAddresses: idxAddrs,
-                data: dataHex,
-                dataSize: (dataHex.startsWith('0x') ? (dataHex.length - 2) : dataHex.length) / 2,
-              }
-            })
-          }).catch(() => {})
         }
       }
     }
 
-    // Native ETH tarama: includeTransactions=true ile sınırlı sayıda bloğu tara
-    const wantBlocks = end - from + 1n
-    const nativeScanCount = wantBlocks > BigInt(NATIVE_MAX_BLOCKS) ? NATIVE_MAX_BLOCKS : Number(wantBlocks)
-    if (nativeScanCount > 0) {
-      const addrs = new Set(addrTopics)
-      const startNum = Number(end) - nativeScanCount + 1
-      for (let b = startNum; b <= Number(end); b++) {
-        const block = await callWithFailover(cl => cl.getBlock({ blockNumber: BigInt(b), includeTransactions: true }))
-        const ts = Number(block.timestamp || 0n)
-        for (const tx of block.transactions || []) {
-          try {
-            if (!tx) continue
-            if (typeof tx.value !== 'bigint') continue
-            const fromAddr = String(tx.from || '').toLowerCase()
-            const toAddr = String(tx.to || '').toLowerCase()
-            if (!addrs.has(fromAddr) && !addrs.has(toAddr)) continue
-            const h = String(tx.hash)
-            pruneSeen()
-            if (seenNativeTx.has(h)) continue
-            seenNativeTx.set(h, Date.now())
-            const dir = addrs.has(fromAddr) && addrs.has(toAddr) ? 'internal' : (addrs.has(fromAddr) ? 'out' : 'in')
-            const input = String(tx.input || '').toLowerCase()
-            const isInstallModule = input.startsWith(METHOD_INSTALL_MODULE)
-            const isAddPool = input.startsWith(METHOD_ADDED_POOL)
-            if (tx.value > 0n) {
-              await fetch(NOTIFIER_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  type: 'native',
-                  title: `NATIVE ETH ${dir.toUpperCase()}`,
-                  addr: addrs.has(fromAddr) ? fromAddr : toAddr,
-                  token: 'ETH',
-                  txHash: h,
-                  block: Number(block.number || b),
-                  timestamp: ts,
-                  meta: { valueWei: tx.value.toString(), from: fromAddr, to: toAddr, dir },
-                })
-              }).catch(() => {})
-            } else if (isInstallModule || isAddPool) {
-              const title = isInstallModule ? 'InstallModule' : 'AddPool'
-              await fetch(NOTIFIER_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  type: 'module_call',
-                  title,
-                  addr: addrs.has(fromAddr) ? fromAddr : toAddr,
-                  token: 'N/A',
-                  txHash: h,
-                  block: Number(block.number || b),
-                  timestamp: ts,
-                  meta: { methodId: input.slice(0,10), from: fromAddr, to: toAddr, dir },
-                })
-              }).catch(() => {})
-            }
-          } catch {}
+    // Native ETH tarama: ayrı periyot kontrolü ile sınırlı sayıda blok taransın
+    const nowMs = Date.now()
+    if (!loop._lastNative || (nowMs - loop._lastNative) >= NATIVE_POLL_MS) {
+      loop._lastNative = nowMs
+      const wantBlocks = end - from + 1n
+      const nativeScanCount = wantBlocks > BigInt(NATIVE_MAX_BLOCKS) ? NATIVE_MAX_BLOCKS : Number(wantBlocks)
+      if (nativeScanCount > 0) {
+        const addrs = new Set(addrTopics)
+        const startNum = Number(end) - nativeScanCount + 1
+        for (let b = startNum; b <= Number(end); b++) {
+          const block = await callWithFailover(cl => cl.getBlock({ blockNumber: BigInt(b), includeTransactions: true }))
+          const ts = Number(block.timestamp || 0n)
+          for (const tx of block.transactions || []) {
+            try {
+              if (!tx) continue
+              if (typeof tx.value !== 'bigint') continue
+              const fromAddr = String(tx.from || '').toLowerCase()
+              const toAddr = String(tx.to || '').toLowerCase()
+              if (!addrs.has(fromAddr) && !addrs.has(toAddr)) continue
+              const h = String(tx.hash)
+              pruneSeen()
+              if (seenNativeTx.has(h)) continue
+              seenNativeTx.set(h, Date.now())
+              const dir = addrs.has(fromAddr) && addrs.has(toAddr) ? 'internal' : (addrs.has(fromAddr) ? 'out' : 'in')
+              const input = String(tx.input || '').toLowerCase()
+              const isInstallModule = input.startsWith(METHOD_INSTALL_MODULE)
+              const isAddPool = input.startsWith(METHOD_ADDED_POOL)
+              if (tx.value > 0n) {
+                await fetch(NOTIFIER_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    type: 'native',
+                    title: `NATIVE ETH ${dir.toUpperCase()}`,
+                    addr: addrs.has(fromAddr) ? fromAddr : toAddr,
+                    token: 'ETH',
+                    txHash: h,
+                    block: Number(block.number || b),
+                    timestamp: ts,
+                    meta: { valueWei: tx.value.toString(), from: fromAddr, to: toAddr, dir },
+                  })
+                }).catch(() => {})
+              } else if (isInstallModule || isAddPool) {
+                const title = isInstallModule ? 'InstallModule' : 'AddPool'
+                await fetch(NOTIFIER_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    type: 'module_call',
+                    title,
+                    addr: addrs.has(fromAddr) ? fromAddr : toAddr,
+                    token: 'N/A',
+                    txHash: h,
+                    block: Number(block.number || b),
+                    timestamp: ts,
+                    meta: { methodId: input.slice(0,10), from: fromAddr, to: toAddr, dir },
+                  })
+                }).catch(() => {})
+              }
+            } catch {}
+          }
         }
       }
     }
@@ -523,5 +500,21 @@ async function loop() {
 
 setInterval(loop, POLL_MS)
 loop()
+
+// Basit healthcheck HTTP sunucusu (Render/Web Service için)
+const HEALTH_PORT = process.env.PORT || 10000
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' })
+    res.end('ok')
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' })
+    res.end('not found')
+  }
+})
+server.listen(HEALTH_PORT, () => {
+  // eslint-disable-next-line no-console
+  console.log(`health server listening on :${HEALTH_PORT}`)
+})
 
 

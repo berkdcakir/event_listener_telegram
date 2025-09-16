@@ -165,6 +165,41 @@ var (
 	tokenPriceTTL   = 30 * time.Second // Varsayılan cache süresi (30 saniye)
 )
 
+// Token allowlist (ERC20 Transfer filtrelemesi için)
+var allowedTokenMap map[string]bool
+
+// initAllowedTokenAllowlist env'den ALLOWED_TOKEN_ADDRESSES okuyup allowlist oluşturur.
+// Boş ise varsayılan olarak bilinen çekirdek token'lar (tokenSymbols) kullanılır.
+func initAllowedTokenAllowlist() {
+	allowedTokenMap = make(map[string]bool)
+	raw := strings.TrimSpace(os.Getenv("ALLOWED_TOKEN_ADDRESSES"))
+	if raw != "" {
+		parts := strings.Split(raw, ",")
+		for _, p := range parts {
+			a := strings.ToLower(strings.TrimSpace(p))
+			if a == "" {
+				continue
+			}
+			if strings.HasPrefix(a, "0x") && len(a) == 42 {
+				allowedTokenMap[a] = true
+			}
+		}
+		log.Printf("🔒 Token allowlist yüklendi (env): %d adres", len(allowedTokenMap))
+		return
+	}
+	for addr := range tokenSymbols {
+		allowedTokenMap[addr] = true
+	}
+	log.Printf("🔒 Token allowlist (varsayılan) aktif: %d adres", len(allowedTokenMap))
+}
+
+func isAllowedToken(addr common.Address) bool {
+	if allowedTokenMap == nil {
+		initAllowedTokenAllowlist()
+	}
+	return allowedTokenMap[strings.ToLower(addr.Hex())]
+}
+
 // getTokenPriceTTL cache süresini ortam değişkeninden alır
 func getTokenPriceTTL() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("TOKEN_PRICE_CACHE_TTL")); v != "" {
@@ -1181,6 +1216,10 @@ func isRelevantLog(lg types.Log) bool {
 	topic0 := lg.Topics[0]
 	// Transfer eventleri: from/to kontrol et
 	if topic0 == transferTopic {
+		// Sadece allowlist'teki token kontratlarının transferlerini kabul et
+		if !isAllowedToken(lg.Address) {
+			return false
+		}
 		if len(lg.Topics) < 3 {
 			return false
 		}
@@ -1715,6 +1754,8 @@ func StartEventListener() {
 
 	// Global event imzalarını yükle
 	initGlobalEvents()
+	// Token allowlist'i başlat
+	initAllowedTokenAllowlist()
 
 	// ABI'lerden event isimlerini yükle
 	if err := LoadABIs(); err != nil {

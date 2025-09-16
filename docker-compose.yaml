@@ -21,8 +21,8 @@ services:
       - viem-watcher/.env
     environment:
       # Go servise bildirim
-      NOTIFIER_URL: http://go-sender:8080/notify
-      BACKEND_API_URL: http://go-sender:8080
+      NOTIFIER_URL: "http://go-sender:8080/notify"
+      BACKEND_API_URL: "http://go-sender:8080"
     volumes:
       - ./listener/abis:/app/listener/abis:ro
     depends_on:
